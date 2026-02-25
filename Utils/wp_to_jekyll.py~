@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""
+wp_to_jekyll.py — Convert a WordPress WXR export to Jekyll markdown files.
+
+Usage:
+    python wp_to_jekyll.py yoursite.wordpress.xml
+    python wp_to_jekyll.py yoursite.wordpress.xml -o _old_posts
+    python wp_to_jekyll.py yoursite.wordpress.xml --include-drafts
+"""
+
+import re
+import sys
+import argparse
+from datetime import datetime
+from pathlib import Path
+import xml.etree.ElementTree as ET
+
+try:
+    import html2text
+except ImportError:
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "html2text"])
+    import html2text
+
+
+# ── Namespace detection ──────────────────────────────────────────────────────
+
+def detect_namespaces(xml_file):
+    """
+    Read namespace URIs directly from the file header.
+    WordPress exports vary between WXR 1.1 and 1.2.
+    """
+    ns = {
+        'content': 'http://purl.org/rss/1.0/modules/content/',
+        'dc':      'http://purl.org/dc/elements/1.1/',
+        'wp':      'http://wordpress.org/export/1.2/',
+        'excerpt': 'http://wordpress.org/export/1.2/excerpt/',
+    }
+    with open(xml_file, 'r', encoding='utf-8', errors='replace') as f:
+        header = f.read(2048)
+
+    wp_match = re.search(r'xmlns:wp=["\']([^"\']+)["\']', header)
+    if wp_match:
+        ns['wp'] = wp_match.group(1)
+
+    exc_match = re.search(r'xmlns:excerpt=["\']([^"\']+)["\']', header)
+    if exc_match:
+        ns['excerpt'] = exc_match.group(1)
+
+    return ns
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def slugify(text):
+    text = text.lower().strip()
+    text = re.sub(r'[^\w\s-]', '', text)
+    text = re.sub(r'[\s_]+', '-', text)
+    return re.sub(r'-+', '-', text).strip('-') or 'untitled'
+
+
+def parse_date(date_str):
+    """Try multiple date formats found in WXR files."""
+    if not date_str or date_str.startswith('0000'):
+        return None
+    for fmt in (
+        '%a, %d %b %Y %H:%M:%S +0000',
+        '%a, %d %b %Y %H:%M:%S %z',
+        '%Y-%m-%d %H:%M:%S',
+    ):
+        try:
+            return datetime.strptime(date_str.strip(), fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def html_to_md(html):
+    h = html2text.HTML2Text()
+    h.ignore_links  = False
+    h.ignore_images = False
+    h.body_width    = 0        # no hard line-wrapping
+    h.unicode_snob  = True
+    h.protect_links = True
+    h.wrap_links    = False
+    return h.handle(html).strip()
+
+
+def yaml_str(value):
+    """Double-quote a value so YAML doesn't choke on colons, brackets, etc."""
+    if not value:
+        return '""'
+    escaped = value.replace('\\', '\\\\').replace('"', '\\"').replace('\n', ' ')
+    return f'"{escaped}"'
+
+
+# ── Parsing ──────────────────────────────────────────────────────────────────
+
+def extract_posts(xml_file, include_drafts=False):
+    ns = detect_namespaces(xml_file)
+    tree = ET.parse(xml_file)
+    channel = tree.getroot().find('channel')
+
+    if channel is None:
+        raise ValueError("No <channel> found — is this a valid WXR export file?")
+
+    allowed_statuses = {'publish', 'draft'} if include_drafts else {'publish'}
+    posts = []
+
+    for item in channel.findall('item'):
+        post_type = (item.findtext(f'{{{ns["wp"]}}}post_type') or '').strip()
+        status    = (item.findtext(f'{{{ns["wp"]}}}status')    or '').strip()
+
+        if post_type != 'post' or status not in allowed_statuses:
+            continue
+
+        title   = (item.findtext('title')                               or 'Untitled').strip()
+        slug    = (item.findtext(f'{{{ns["wp"]}}}post_name')            or '').strip()
+        content =  item.findtext(f'{{{ns["content"]}}}encoded')         or ''
+        excerpt = (item.findtext(f'{{{ns["excerpt"]}}}encoded')         or '').strip()
+        author  = (item.findtext(f'{{{ns["dc"]}}}creator')              or '').strip()
+        link    = (item.findtext('link')                                or '').strip()
+
+        # pubDate is RFC 822; wp:post_date is a fallback
+        dt = parse_date(item.findtext('pubDate') or '') \
+          or parse_date(item.findtext(f'{{{ns["wp"]}}}post_date') or '')
+
+        categories, tags = [], []
+        for cat in item.findall('category'):
+            domain = cat.get('domain', '')
+            text   = (cat.text or '').strip()
+            if not text:
+                continue
+            if domain == 'category':
+                categories.append(text)
+            elif domain == 'post_tag':
+                tags.append(text)
+
+        posts.append({
+            'title':      title,
+            'slug':       slug,
+            'date':       dt,
+            'status':     status,
+            'content':    content,
+            'excerpt':    excerpt,
+            'author':     author,
+            'link':       link,
+            'categories': categories,
+            'tags':       tags,
+        })
+
+    return posts
+
+
+# ── Writing ──────────────────────────────────────────────────────────────────
+
+def build_front_matter(post):
+    lines = ['---']
+    lines.append('layout: post')
+    lines.append(f'title: {yaml_str(post["title"])}')
+
+    if post['date']:
+        lines.append(f'date: {post["date"].strftime("%Y-%m-%d %H:%M:%S")} +0000')
+
+    if post['status'] == 'draft':
+        lines.append('published: false')
+
+    if post['author']:
+        lines.append(f'author: {yaml_str(post["author"])}')
+
+    # Merge original categories with the archive marker (deduplicated)
+    cats = list(dict.fromkeys(post['categories'] + ['old-posts-archive']))
+    lines.append('categories:')
+    lines.extend(f'  - {yaml_str(c)}' for c in cats)
+
+    if post['tags']:
+        lines.append('tags:')
+        lines.extend(f'  - {yaml_str(t)}' for t in post['tags'])
+
+    if post['excerpt']:
+        lines.append(f'excerpt: {yaml_str(post["excerpt"][:250])}')
+
+    if post['link']:
+        lines.append(f'original_url: {yaml_str(post["link"])}')
+
+    lines.append('---')
+    return '\n'.join(lines)
+
+
+def write_post(post, output_dir):
+    date_prefix = post['date'].strftime('%Y-%m-%d') if post['date'] else '1900-01-01'
+    slug = re.sub(r'[^\w-]', '-', post['slug'] or slugify(post['title']))
+    slug = re.sub(r'-+', '-', slug).strip('-') or 'post'
+
+    filename = f"{date_prefix}-{slug}.md"
+    body = html_to_md(post['content']) if post['content'].strip() else '*No content.*'
+
+    (Path(output_dir) / filename).write_text(
+        f"{build_front_matter(post)}\n\n{body}\n",
+        encoding='utf-8'
+    )
+    return filename
+
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Convert a WordPress WXR export to Jekyll markdown files.'
+    )
+    parser.add_argument('input', help='Path to the WordPress .xml export file')
+    parser.add_argument('-o', '--output', default='_old_posts',
+                        help='Output folder (default: _old_posts)')
+    parser.add_argument('--include-drafts', action='store_true',
+                        help='Also convert drafts (marked published: false)')
+    args = parser.parse_args()
+
+    out = Path(args.output)
+    out.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n📂  Parsing: {args.input}")
+    posts = extract_posts(args.input, include_drafts=args.include_drafts)
+    print(f"✅  Found {len(posts)} post(s).\n")
+
+    if not posts:
+        print("No published posts found. Is this a valid WXR file?")
+        return
+
+    for post in posts:
+        fname      = write_post(post, out)
+        date_label = post['date'].strftime('%Y-%m-%d') if post['date'] else '(no date)'
+        draft_tag  = ' [DRAFT]' if post['status'] == 'draft' else ''
+        print(f"  ✓  {fname}  —  {post['title'][:55]}{draft_tag}")
+
+    print(f"\n🎉  {len(posts)} file(s) written to '{out}/'")
+
+    print("""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  JEKYLL SETUP — HOW TO USE YOUR ARCHIVE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+OPTION A  ──  Drop into _posts/ (simplest, one line)
+  Just move the .md files into your Jekyll site's _posts/
+  folder. They'll be treated as regular posts.
+
+OPTION B  ──  Separate collection (cleaner for archives)
+
+  1. Keep the _old_posts/ folder in your Jekyll site root.
+
+  2. Add to _config.yml:
+
+       collections:
+         old_posts:
+           output: true
+           permalink: /archive/:year/:month/:title/
+
+  3. Create archive/index.md (your single archive page):
+
+       ---
+       layout: page
+       title: Old Posts Archive
+       ---
+
+       {% assign archive = site.old_posts | sort: "date" | reverse %}
+       {% for post in archive %}
+       ### [{{ post.title }}]({{ post.url }})
+       *{{ post.date | date: "%B %-d, %Y" }}*
+       {% if post.excerpt %}{{ post.excerpt }}{% endif %}
+       ---
+       {% endfor %}
+
+  Every generated file already has  category: old-posts-archive
+  in its front matter, so you can also filter with:
+  {% assign archive = site.posts | where_exp: "p",
+      "p.categories contains 'old-posts-archive'" %}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+""")
+
+
+if __name__ == '__main__':
+    main()
+
