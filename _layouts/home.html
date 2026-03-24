@@ -1,0 +1,94 @@
+---
+layout: default
+---
+
+<div class="home">
+  {%- if page.title -%}
+    <h1 class="page-heading">{{ page.title }}</h1>
+  {%- endif -%}
+
+  {{ content }}
+
+  <!-- LATEST POSTS -->
+  {%- if site.posts.size > 0 -%}
+    <h2 class="post-list-heading">{{ page.list_title | default: "Latest Posts" }}</h2>
+    <ul class="post-list">
+      {%- for post in site.posts limit: 3 -%}
+      <li>
+        {%- assign date_format = site.minima.date_format | default: "%b %-d, %Y" -%}
+        <span class="post-meta">{{ post.date | date: date_format }}</span>
+        <h3>
+          <a class="post-link" href="{{ post.url | relative_url }}">
+            {{ post.title | escape }}
+          </a>
+        </h3>
+        {%- if site.show_excerpts -%}
+          {{ post.excerpt }}
+        {%- endif -%}
+      </li>
+      {%- endfor -%}
+    </ul>
+    <p class="view-all">
+      <a href="{{ '/posts/' | relative_url }}">View all Posts &rarr;</a>
+    </p>
+  {%- endif -%}
+
+  <!-- LATEST BIKES -->
+  {%- if site.bikes.size > 0 -%}
+    <h2 class="post-list-heading">Latest Bikes</h2>
+    <ul class="post-list">
+      {%- assign sorted_bikes = site.bikes | sort: "date" | reverse -%}
+      {%- for bike in sorted_bikes limit: 3 -%}
+      <li>
+        {%- assign date_format = site.minima.date_format | default: "%b %-d, %Y" -%}
+        {%- if bike.date -%}
+          <span class="post-meta">{{ bike.date | date: date_format }}</span>
+        {%- endif -%}
+        <h3>
+          <a class="post-link" href="{{ bike.url | relative_url }}">
+            {{ bike.title | escape }}
+          </a>
+        </h3>
+        {%- if site.show_excerpts -%}
+          {{ bike.excerpt }}
+        {%- endif -%}
+      </li>
+      {%- endfor -%}
+    </ul>
+    <p class="view-all">
+      <a href="{{ '/bikes/' | relative_url }}">View all Bikes &rarr;</a>
+    </p>
+  {%- endif -%}
+
+  <!-- LATEST RESOURCES -->
+  {%- if site.resources.size > 0 -%}
+    <h2 class="post-list-heading">Latest Resources</h2>
+    <ul class="post-list">
+      {%- assign sorted_resources = site.resources | sort: "date" | reverse -%}
+      {%- for resource in sorted_resources limit: 3 -%}
+      <li>
+        {%- assign date_format = site.minima.date_format | default: "%b %-d, %Y" -%}
+        {%- if resource.date -%}
+          <span class="post-meta">{{ resource.date | date: date_format }}</span>
+        {%- endif -%}
+        <h3>
+          <a class="post-link" href="{{ resource.url | relative_url }}">
+            {{ resource.title | escape }}
+          </a>
+        </h3>
+        {%- if site.show_excerpts -%}
+          {{ resource.excerpt }}
+        {%- endif -%}
+      </li>
+      {%- endfor -%}
+    </ul>
+    <p class="view-all">
+      <a href="{{ '/resources/' | relative_url }}">View all Resources &rarr;</a>
+    </p>
+  {%- endif -%}
+
+  {%- if site.posts.size > 0 -%}
+    <p class="rss-subscribe">subscribe <a href="{{ "/feed.xml" | relative_url }}">via RSS</a></p>
+  {%- endif -%}
+
+</div>

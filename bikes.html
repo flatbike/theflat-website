@@ -1,0 +1,14 @@
+---
+layout: page
+title: All Bikes
+permalink: /bikes/
+---
+
+<ul>
+    {%- assign sorted_bikes = site.bikes | sort: "date" | reverse -%} {%- for
+    bike in sorted_bikes -%}
+    <li>
+        <a href="{{ bike.url | relative_url }}">{{ bike.title }}</a>
+    </li>
+    {%- endfor -%}
+</ul>

@@ -1,0 +1,14 @@
+---
+layout: page
+title: All Resources
+permalink: /resources/
+---
+
+<ul>
+    {%- assign sorted_resources = site.resources | sort: "date" | reverse -%}
+    {%- for resource in sorted_resources -%}
+    <li>
+        <a href="{{ resource.url | relative_url }}">{{ resource.title }}</a>
+    </li>
+    {%- endfor -%}
+</ul>
